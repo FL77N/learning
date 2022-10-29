@@ -5,7 +5,7 @@
 using namespace std;
 
 __device__ const int thread_num = 256;
-static const int block_num = 256;
+static const int block_num = 64;
 static const bool cpu_sum = true;
 
 __global__ void  vector_dot_product_1(float *c, float *a, float *b, int n){
@@ -177,6 +177,55 @@ __global__ void vector_dot_product_5(float *c, float *a, float *b, float *t, int
 }
 
 
+__global__ void vector_dot_product_3_2(float *c, float *a, float *b, float *t, int n) {
+    __shared__ float tmp[thread_num];
+    const int tidx = threadIdx.x;
+    const int bidx = blockIdx.x;
+    const int t_n = blockDim.x * gridDim.x;
+    int tid = bidx * blockDim.x + tidx;
+    double temp = 0.0;
+    while (tid < n) {
+        temp = __fadd_rn(temp, __fmul_rn(a[tid],b[tid]));
+	tid += t_n;
+    }
+    tmp[tidx] = temp;
+    // wait for all thread to complete coping
+    __syncthreads();
+
+ //   int i = blockDim.x >> 1;
+ //   while(i != 32) {
+ //       if (tidx < i) {
+ //           tmp[tidx]=__fadd_rn(tmp[tidx], tmp[tidx+i]);
+ //     }
+ //       __syncthreads();
+ //       i >>= 1;
+ //   }
+
+    //in-place reduction in global memory
+    if(blockDim.x>=1024 && tidx <512) tmp[tidx] = __fadd_rn(tmp[tidx], tmp[tidx+512]);
+    __syncthreads();
+    if(blockDim.x>=512 && tidx <256) tmp[tidx] = __fadd_rn(tmp[tidx], tmp[tidx+256]);
+    __syncthreads();
+    if(blockDim.x>=256 && tidx <128) tmp[tidx] = __fadd_rn(tmp[tidx], tmp[tidx+128]);
+    __syncthreads();
+    if(blockDim.x>=128 && tidx <64) tmp[tidx] = __fadd_rn(tmp[tidx], tmp[tidx+64]);
+    __syncthreads();
+ 
+    if (tidx < 32) {
+        volatile float *tmp_1 = tmp;
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+32]);
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+16]);
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+8]);
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+4]);
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+2]);
+        tmp_1[tidx] = __fadd_rn(tmp_1[tidx], tmp_1[tidx+1]);
+	if (tidx==0) {
+            c[bidx] = tmp_1[0];
+	}
+    }
+}
+
+
 int main() {
     float *h_a, *h_b, *h_o;
     float *d_a, *d_b, *d_o;
@@ -214,7 +263,7 @@ int main() {
     // 计数法
     float *h_t;
     cudaMalloc((void**) &h_t, sizeof(float) * N);
-    vector_dot_product_5<<<block_num, thread_num>>>(d_o, d_a, d_b, h_t, N);
+    vector_dot_product_3_2<<<block_num, thread_num>>>(d_o, d_a, d_b, h_t, N);
 
     // copy results back to CPU
     cudaMemcpy(h_o, d_o, sizeof(float) * N, cudaMemcpyDeviceToHost);
@@ -232,7 +281,7 @@ int main() {
     float elapsedTime;
     cudaEventElapsedTime(&elapsedTime, start, stop);
     
-    cout << "The kernel function is during: " << elapsedTime << "ms" << endl;
+    cout << "The kernel function is during: " << elapsedTime << " ms" << endl;
 
     cout << "The final results (M * N): " << h_o[0] << endl;
     // free GPU mem
