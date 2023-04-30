@@ -1,12 +1,12 @@
 #include <iostream>
 
-#define M 5000
-#define N 5000
-#define L 8000
+#define M 2048
+#define N 2048
+#define L 2048
 
 using namespace std;
 
-static const bool align = true;
+static const bool align = false;
 __device__ const int threadnum = 32;
 
 
